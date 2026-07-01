@@ -107,6 +107,8 @@ class ChatIn(BaseModel):
     message: str
     customer_id: int | None = None
     thread_id: str = "default"
+    ticket_subject: str | None = None   # add this
+    ticket_body: str | None = None      # add this
 
 
 class DocIn(BaseModel):
@@ -128,6 +130,10 @@ class TicketIn(BaseModel):
 
 class RefreshIn(BaseModel):
     refresh_token: str
+
+class UserTicketIn(BaseModel):
+    subject: str
+    body: str
 # ── Auth endpoints ─────────────────────────────────────────────────────────────
 @app.post("/auth/login", response_model=Token)
 @limiter.limit("5/minute")
@@ -247,12 +253,20 @@ async def chat(
     else:
         customer_id = body.customer_id or current_user.customer_id or 0
 
+    # build ticket context if chatting on a ticket
+    ticket_context = []
+    if body.ticket_subject or body.ticket_body:
+        ticket_context = [
+            f"Ticket subject: {body.ticket_subject or ''}\n"
+            f"Ticket description: {body.ticket_body or ''}"
+        ]
+
     result = await graph.ainvoke(
         {
             "message": body.message,
             "customer_id": customer_id,
             "memories": [],
-            "context": [],
+            "context": ticket_context,
         },
         config=config,
     )
@@ -583,3 +597,61 @@ async def refresh_token(
         username=user["username"],
         customer_id=user.get("customer_id"),
     )
+@app.post("/tickets/mine")
+async def create_my_ticket(
+    body: UserTicketIn,
+    current_user: Annotated[TokenData, Depends(require_any)],
+    db: AsyncConnectionPool = Depends(get_db),
+):
+    """
+    User creates a support ticket.
+    customer_id is taken from their JWT — they can only create tickets for themselves.
+    thread_id is auto-generated from the ticket id after insert.
+    """
+    async with db.connection() as conn:
+        row = await (await conn.execute(
+            """
+            INSERT INTO tickets (customer_id, subject, body, status)
+            VALUES (%s, %s, %s, 'new')
+            RETURNING id, subject, body, status, created_at
+            """,
+            (current_user.customer_id, body.subject, body.body),
+        )).fetchone()
+
+        # use ticket id as thread_id — keeps chat and ticket in sync
+        await conn.execute(
+            "UPDATE tickets SET thread_id = %s WHERE id = %s",
+            (f"ticket-{row['id']}", row['id']),
+        )
+
+    return {
+        "id": row["id"],
+        "subject": row["subject"],
+        "body": row["body"],
+        "status": row["status"],
+        "thread_id": f"ticket-{row['id']}",
+        "created_at": str(row["created_at"]),
+    }
+
+
+@app.get("/tickets/mine")
+async def get_my_tickets(
+    current_user: Annotated[TokenData, Depends(require_any)],
+    db: AsyncConnectionPool = Depends(get_db),
+):
+    """
+    User sees only their own tickets.
+    customer_id from JWT ensures isolation — users can never see other customers' tickets.
+    """
+    async with db.connection() as conn:
+        rows = await (await conn.execute(
+            """
+            SELECT id, subject, body, status, intent, urgency,
+                   sla_breached, thread_id, created_at
+            FROM tickets
+            WHERE customer_id = %s
+            ORDER BY created_at DESC
+            """,
+            (current_user.customer_id,),
+        )).fetchall()
+    return rows

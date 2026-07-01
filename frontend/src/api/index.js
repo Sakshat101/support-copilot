@@ -1,13 +1,13 @@
 import axios from 'axios'
 
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: BASE_URL,
   timeout: 30000,
 })
 
 // ── Token management ──────────────────────────────────────────
-// sessionStorage: survives page refresh, gone when tab closes
-// Production upgrade: httpOnly cookies set by server (immune to XSS)
 export function getToken() {
   return sessionStorage.getItem('token')
 }
@@ -18,6 +18,22 @@ export function getRole() {
 
 export function getUsername() {
   return sessionStorage.getItem('username')
+}
+
+export function getCustomerId() {
+  return sessionStorage.getItem('customer_id')
+}
+
+export function getRefreshToken() {
+  return sessionStorage.getItem('refresh_token')
+}
+
+export function isLoggedIn() {
+  return !!getToken()
+}
+
+export function isAdmin() {
+  return getRole() === 'admin'
 }
 
 export function saveAuth(token, refreshToken, role, username, customerId) {
@@ -36,17 +52,7 @@ export function clearAuth() {
   sessionStorage.removeItem('customer_id')
 }
 
-export function getRefreshToken() {
-  return sessionStorage.getItem('refresh_token')
-}
-
-export function isLoggedIn() {
-  return !!getToken()
-}
-
-export function isAdmin() {
-  return getRole() === 'admin'
-}
+// ── Axios interceptors ────────────────────────────────────────
 
 // attach token to every request automatically
 api.interceptors.request.use(config => {
@@ -55,7 +61,7 @@ api.interceptors.request.use(config => {
   return config
 })
 
-// track if we're already refreshing to prevent loops
+// auto-refresh on 401
 let isRefreshing = false
 let refreshQueue = []
 
@@ -68,7 +74,6 @@ api.interceptors.response.use(
       original._retry = true
 
       if (isRefreshing) {
-        // queue this request until refresh completes
         return new Promise((resolve, reject) => {
           refreshQueue.push({ resolve, reject })
         }).then(token => {
@@ -87,13 +92,12 @@ api.interceptors.response.use(
       }
 
       try {
-        const res = await axios.post('http://localhost:8000/auth/refresh', {
+        const res = await axios.post(`${BASE_URL}/auth/refresh`, {
           refresh_token: refreshToken,
         })
         const { access_token, refresh_token: newRefresh, role, username, customer_id } = res.data
         saveAuth(access_token, newRefresh, role, username, customer_id)
 
-        // retry queued requests with new token
         refreshQueue.forEach(({ resolve }) => resolve(access_token))
         refreshQueue = []
 
@@ -130,9 +134,12 @@ export async function getMe() {
 }
 
 // ── Chat (streaming) ──────────────────────────────────────────
-export async function sendMessage({ message, customerId, threadId }, onChunk) {
+export async function sendMessage(
+  { message, customerId, threadId, ticketSubject, ticketBody },
+  onChunk
+) {
   const token = getToken()
-  const res = await fetch('http://localhost:8000/chat', {
+  const res = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -142,6 +149,8 @@ export async function sendMessage({ message, customerId, threadId }, onChunk) {
       message,
       customer_id: customerId ? Number(customerId) : null,
       thread_id: threadId || 'default',
+      ticket_subject: ticketSubject || null,
+      ticket_body: ticketBody || null,
     }),
   })
 
@@ -160,18 +169,28 @@ export async function sendMessage({ message, customerId, threadId }, onChunk) {
   return null
 }
 
-// ── Admin endpoints ───────────────────────────────────────────
+// ── Approvals ─────────────────────────────────────────────────
 export const getApprovals = () =>
   api.get('/approvals').then(r => r.data)
 
 export const approveAction = (threadId, approved) =>
   api.post('/approve', { thread_id: threadId, approved }).then(r => r.data)
 
+// ── Documents ─────────────────────────────────────────────────
 export const getDocuments = () =>
   api.get('/documents').then(r => r.data)
 
 export const addDocument = (title, content, source) =>
   api.post('/documents', { title, content, source }).then(r => r.data)
 
+// ── Memories ──────────────────────────────────────────────────
 export const getMemories = (customerId) =>
   api.get(`/memories/${customerId}`).then(r => r.data)
+
+// ── Tickets (user) ────────────────────────────────────────────
+export const createTicket = (subject, body) =>
+  api.post('/tickets/mine', { subject, body }).then(r => r.data)
+
+export const getMyTickets = () =>
+  api.get('/tickets/mine').then(r => r.data)
+

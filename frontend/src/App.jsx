@@ -13,6 +13,8 @@ import CustomerPage   from './pages/CustomerPage'
 import MetricsPage    from './pages/MetricsPage'
 import UsersPage from './pages/UsersPage'
 import TicketsPage from './pages/TicketsPage'
+import MyTicketsPage   from './pages/MyTicketsPage'
+import TicketChatPage  from './pages/TicketChatPage'
 // ── Route guards ──────────────────────────────────────────────
 
 function RequireAuth({ children }) {
@@ -36,6 +38,7 @@ const NAV = [
   { to: '/metrics',   icon: BarChart2,     label: 'Metrics',        adminOnly: true  },
   { to: '/tickets', icon: Ticket, label: 'Tickets', adminOnly: true },
   { to: '/users', icon: Users, label: 'Users', adminOnly: true },
+  { to: '/my-tickets', icon: Ticket, label: 'My Tickets', adminOnly: false }
 ]
 
 // ── Sidebar ───────────────────────────────────────────────────
@@ -130,12 +133,18 @@ function AppLayout() {
           <Route path="/metrics" element={
             <RequireAdmin><MetricsPage /></RequireAdmin>
           } />
+          <Route path="/tickets" element={
+            <RequireAdmin><TicketsPage /></RequireAdmin>
+          } />
           <Route path="/users" element={
             <RequireAdmin><UsersPage /></RequireAdmin>
           } />
-          <Route path="/tickets" element={
-  <RequireAdmin><TicketsPage /></RequireAdmin>
-} />
+          <Route path="/my-tickets" element={
+            <RequireAuth><MyTicketsPage /></RequireAuth>
+          } />
+          <Route path="/tickets/:ticketId/chat" element={
+            <RequireAuth><TicketChatPage /></RequireAuth>
+          } />
         </Routes>
       </main>
     </div>
